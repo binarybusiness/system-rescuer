@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# remove from airootfs!
+# Package scriptlets create these host identities in the build chroot. Remove
+# them after the transaction; rescue-identities.service recreates them on the
+# machine that boots the image.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = nvme-cli
+Target = open-iscsi
+Target = brltty
+
+[Action]
+Description = Removing build-chroot host identities from the live image...
+When = PostTransaction
+Exec = /usr/bin/rm -f /etc/nvme/hostnqn /etc/nvme/hostid /etc/iscsi/initiatorname.iscsi /etc/brlapi.key

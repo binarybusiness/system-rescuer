@@ -1,0 +1,11 @@
+[Unit]
+Description=The stick's offline package repository at /run/rescue-repo
+After=local-fs.target systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/rescue-repo
+
+[Install]
+WantedBy=multi-user.target

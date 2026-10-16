@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# rescue-proxy.service's ExecStartPre: write the proxy's Authorization header
+# from the key file into a root-only file beside it in /run/.rescue-key, the
+# tmpfs that rescue-secrets mounts and the repair agent's mount namespace
+# unmounts, and the upstream's address from /etc/rescue/provider.conf into
+# /run/rescue-proxy/upstream.conf. The key goes from file to file through bash
+# builtins, never through argv or output.
+set -euo pipefail
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-paths.sh
+. /usr/local/lib/rescue-paths.sh
+dir=$rescue_key_dir
+key_file=$rescue_key_file
+umask 077
+mountpoint -q "$dir" || { echo "rescue-proxy-conf: $dir is not mounted (rescue-secrets.service)" >&2; exit 1; }
+provider=$rescue_provider_conf
+upstream=/run/rescue-proxy/upstream.conf
+url='' ca=''
+while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+        url=*) url=${line#url=} ;;
+        ca_file=*) ca=${line#ca_file=} ;;
+    esac
+done < "$provider"
+# https://host[:port][/path]; build.sh checked it, and this is the second look
+# before it becomes an nginx directive.
+[[ $url =~ ^https://([A-Za-z0-9.-]+(:[0-9]+)?)(/[A-Za-z0-9._~/-]*)?$ ]] \
+    || { echo "rescue-proxy-conf: $provider holds no https url" >&2; exit 1; }
+authority=${BASH_REMATCH[1]} path=${BASH_REMATCH[3]%/}
+host=${authority%%:*}
+[[ -z $ca || $ca =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "rescue-proxy-conf: bad ca_file in $provider" >&2; exit 1; }
+{
+    printf 'proxy_pass https://%s%s/;\n' "$authority" "$path"
+    printf 'proxy_ssl_server_name on;\nproxy_ssl_name %s;\nproxy_ssl_verify on;\n' "$host"
+    printf 'proxy_ssl_trusted_certificate %s;\n' "${ca:-/etc/ssl/certs/ca-certificates.crt}"
+    printf 'proxy_set_header Host %s;\n' "$authority"
+} > "$upstream.new"
+mv -f "$upstream.new" "$upstream"
+# An image built with no key has none until it is typed at tty1: the proxy
+# starts with no header, and rescue-agent restarts it once the key is written.
+if [[ ! -s $key_file ]]; then
+    : > "$rescue_auth_conf"
+    exit 0
+fi
+key=$(<"$key_file")
+key=${key//[$'\r\n\t ']/}
+# Anything but a plain token could break out of the nginx directive.
+[[ $key =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "rescue-proxy-conf: the key file holds no plain token" >&2; exit 1; }
+printf 'proxy_set_header Authorization "Bearer %s";\n' "$key" > "$rescue_auth_conf.new"
+mv -f "$rescue_auth_conf.new" "$rescue_auth_conf"

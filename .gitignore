@@ -1,0 +1,21 @@
+# Local research corpus
+/knowledge/
+
+# Environment and editor state
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+
+# Replace or extend with stack-specific build artifacts.
+# archiso build tree and output
+/work/
+/out/
+*.iso
+# the API key file is generated at build time and never committed
+**/anthropic-key
+
+# Python bytecode
+__pycache__/

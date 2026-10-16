@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Read-only survey of the machine this stick booted: hardware, disks, SMART
+# health, storage errors, firmware boot entries and a matching machine
+# profile. Mounts nothing and writes only /run/rescue/survey.txt.
+set -uo pipefail
+
+out=/run/rescue/survey.txt
+machines=/root/rescue/machines
+mkdir -p /run/rescue
+
+# The rescue stick is the disk holding archiso's boot medium.
+stick_part=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)
+stick=${stick_part:+$(lsblk -no PKNAME "$stick_part" 2>/dev/null | head -n 1)}
+
+dmi() { cat "/sys/class/dmi/id/$1" 2>/dev/null || echo "?"; }
+
+survey() {
+    printf 'system-rescuer survey %s\n' "$(date -u +%FT%TZ)"
+
+    printf '\n== machine\n'
+    printf 'vendor: %s  product: %s  board: %s %s  firmware version: %s\n' \
+        "$(dmi sys_vendor)" "$(dmi product_name)" "$(dmi board_vendor)" "$(dmi board_name)" "$(dmi bios_version)"
+    if [[ -d /sys/firmware/efi ]]; then echo "firmware mode: UEFI"; else echo "firmware mode: BIOS (legacy)"; fi
+    printf 'cpu: %s\n' "$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n 1)"
+    printf 'memory: %s\n' "$(awk '/^MemTotal/ {printf "%.1f GiB", $2 / 1048576}' /proc/meminfo)"
+    printf 'rescue stick: /dev/%s (do not write to it)\n' "${stick:-unknown}"
+
+    printf '\n== disks and filesystems\n'
+    lsblk -o NAME,SIZE,TYPE,TRAN,RM,MODEL,FSTYPE,FSVER,LABEL,UUID,PARTTYPENAME,MOUNTPOINTS
+
+    printf '\n== write protection (block layer)\n'
+    echo "Every disk starts read-only (RO 1) at boot; blockdev --setrw /dev/<disk> lifts it."
+    lsblk -dno NAME,RO,SIZE,MODEL | awk '$1 !~ /^(zram|loop|sr|fd)/'
+
+    printf '\n== disk health (smartctl)\n'
+    local name
+    while read -r name; do
+        [[ $name == "$stick" ]] && continue
+        printf -- '-- /dev/%s\n' "$name"
+        timeout 30 smartctl -H -A "/dev/$name" 2>&1 \
+            | grep -E 'overall-health|SMART Health Status|Reallocated_Sector|Current_Pending|Offline_Uncorrectable|Reported_Uncorrect|UDMA_CRC|Critical Warning|Media and Data Integrity|Percentage Used|Unavailable|not supported|failed' \
+            || echo "no SMART data"
+    done < <(lsblk -dnro NAME,TYPE | awk '$2 == "disk" && $1 !~ /^(zram|loop)/ {print $1}')
+
+    printf '\n== storage errors this boot (kernel)\n'
+    journalctl -k -b -p warning --no-pager -q 2>/dev/null \
+        | grep -iE 'ata[0-9]|nvme|scsi|i/o error|blk_update|reset|EXT4-fs|BTRFS|XFS|FAT-fs|md/|device-mapper' \
+        | tail -n 40 || true
+
+    printf '\n== firmware boot entries\n'
+    if [[ -d /sys/firmware/efi ]]; then
+        timeout 10 efibootmgr -v 2>&1 || true
+    else
+        echo "none (BIOS boot)"
+    fi
+
+    printf '\n== machine profile\n'
+    local present matched=0 dir id total hits
+    present=$(lsblk -rno UUID | sort -u)
+    for dir in "$machines"/*/; do
+        [[ -f $dir/match ]] || continue
+        total=0 hits=0
+        while read -r id; do
+            [[ -z $id || $id == \#* ]] && continue
+            total=$((total + 1))
+            grep -qixF "$id" <<< "$present" && hits=$((hits + 1))
+        done < "$dir/match"
+        if (( hits > 0 )); then
+            printf 'machine profile: %s (%d of %d identifiers present) -> %sprofile.md\n' \
+                "$(basename "$dir")" "$hits" "$total" "$dir"
+            matched=1
+        fi
+    done
+    (( matched )) || echo "machine profile: none (an unknown machine; diagnose from evidence)"
+}
+
+survey > "$out" 2>&1
+printf 'rescue-survey: %s\n' "$out"
+grep '^machine profile:' "$out"

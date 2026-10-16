@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # GitHub's hosted image, pinned by name. The fork guard stays as a second
+    # layer in case a job is ever moved off the hosted fleet.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # Install a pinned ShellCheck release over HTTPS and check its sha256.
+      - name: Install ShellCheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+        run: |
+          dir="$RUNNER_TEMP/shellcheck"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/shellcheck.tar.gz" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+          echo "${SHELLCHECK_SHA256}  $dir/shellcheck.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/shellcheck.tar.gz" -C "$dir" --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          echo "$dir" >> "$GITHUB_PATH"
+          "$dir/shellcheck" --version
+      # The workflow check parses YAML with PyYAML, from Ubuntu's package.
+      - name: Install PyYAML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-yaml
+      - name: Verify
+        run: |
+          find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r shellcheck
+          tests/spdx-check.sh
+          tests/spdx-check-test.sh
+          tests/workflow-check.sh
+          tests/workflow-check-test.sh
+          tests/leak-check.sh --tree . --paths tests/public-paths
+          tests/leak-check-test.sh
+          python3 tests/link-check.py .
+          python3 tests/bench/guardrails.py --check-brief
+          python3 tests/bench/playbooks-check.py

@@ -1,0 +1,14 @@
+# Test-only ISO (scenario C6, tests/bench/no-dhcp-overlay): the bench's own
+# NIC, qemu's restricted user network with the SSH forward, at the address
+# that forward expects. It has no gateway and does not count for online, so
+# the machine's own NIC still has no route out.
+[Match]
+MACAddress=52:54:00:be:0c:01
+
+[Link]
+RequiredForOnline=no
+
+[Network]
+Address=10.0.3.15/24
+LinkLocalAddressing=no
+IPv6AcceptRA=no

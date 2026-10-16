@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# The repair agent: OpenCode in /root/rescue, whose AGENTS.md is the brief.
+# It starts once rescue-keycheck passes; until then this window says in plain
+# words what is missing (the network, or a key the API accepts) and checks
+# again by itself. If OpenCode dies, it is started again on its own session,
+# told to pick up from /root/rescue-log; when the owner quits it, the window
+# falls back to a shell so the session stays usable. rescue-hang-watch
+# restarts it the same way when one of its commands hangs in uninterruptible
+# I/O, and the restart prompt names that command.
+# An image built with --no-key carries no key (rescue-secrets leaves
+# /run/rescue/key-at-boot): before the check, this window asks for it, masked,
+# and keeps it only in /run/.rescue-key; a rejected key is asked for again.
+# When the stick holds a key record (rescue-key-record) the key is already in
+# place and nothing is asked; a record that could not be used is named first.
+# When rescue-repo found no offline package repository, it says the stick
+# works online only, and why.
+# OpenCode never holds the model API's key: it talks to rescue-proxy.service
+# on 127.0.0.1:8484, which adds the key. OpenCode runs in a mount namespace of
+# its own whose mounts still propagate to the rest of the system (the owner
+# sees what the agent mounts), except that the secrets' own mounts are absent
+# there (rescue-secrets): /run/.rescue-key, which holds the key and the proxy's
+# header, so nothing the agent runs can read the key by accident; /var/lib/iwd,
+# so it cannot read a Wi-Fi password the owner typed; and the image's root
+# (/run/archiso/airootfs), whose copy of the key the system's root deletes.
+# SSH sessions see them all as before.
+set -uo pipefail
+
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-paths.sh
+. /usr/local/lib/rescue-paths.sh
+key_file=$rescue_key_file
+key_at_boot=$rescue_key_at_boot
+provider_conf=${RESCUE_PROVIDER_CONF:-$rescue_provider_conf}
+provider_host=$(sed -n 's/^host=//p' "$provider_conf" 2>/dev/null)
+provider_name=$(sed -n 's/^model_name=//p' "$provider_conf" 2>/dev/null)
+key_prefix=$(sed -n 's/^key_prefix=//p' "$provider_conf" 2>/dev/null)
+
+# key_shape_problem <candidate>: sets shape_reason and fails when the key is
+# not of the shape the build checks (non-empty, no whitespace, 20 characters,
+# the prefix), or has characters the proxy's header could not carry. The
+# reason never holds the candidate.
+key_shape_problem() {
+    shape_reason=''
+    if [[ -z $1 ]]; then shape_reason='nothing was typed'
+    elif [[ $1 =~ [[:space:]] ]]; then shape_reason='it has a space or tab in it'
+    elif (( ${#1} < 20 )); then shape_reason="it is too short (${#1} characters; a key has at least 20)"
+    elif [[ -n $key_prefix && $1 != "$key_prefix"* ]]; then shape_reason="it does not start with $key_prefix, as $provider_host's keys do"
+    elif [[ ! $1 =~ ^[A-Za-z0-9_.-]+$ ]]; then shape_reason='it has characters a key does not (only letters, digits, - _ . are taken)'
+    fi
+    [[ -z $shape_reason ]]
+}
+
+# ask_key <first|rejected <result>>: ask for the key on this terminal until one
+# of the right shape is written to the key file, then restart rescue-proxy so
+# that it takes the key. Typing is masked (stty and read -s); the key goes
+# through bash builtins only, never argv or output. In the rejected case it
+# also returns after 10 minutes, or when the file is rewritten over SSH.
+ask_key() {
+    local part buf='' rc stamp=$rescue_state_dir/keycheck-stamp deadline=0
+    mkdir -p "$rescue_state_dir"
+    touch "$stamp"
+    if [[ $1 == first ]]; then
+        printf '\n'; printf -- '-%.0s' $(seq 64); printf '\n'
+        if [[ -s $rescue_state_dir/record-problem ]]; then
+            printf ' THE KEY RECORD ON THIS STICK COULD NOT BE USED: %s.\n' "$(< "$rescue_state_dir/record-problem")"
+            printf ' Write the stick again with ./install.sh --prebuilt, or type the key here.\n'
+        fi
+        printf '%s\n' \
+            " THIS STICK CARRIES NO API KEY: the repair agent cannot start yet." \
+            " Its model, $provider_name, runs at $provider_host and needs your key." \
+            " Type or paste it here and press Enter; nothing is shown as you type." \
+            " It is kept only in this machine's memory, never on the stick, and is" \
+            " gone when the machine powers off."
+        [[ -z $key_prefix ]] || printf ' A key from %s starts with %s\n' "$provider_host" "$key_prefix"
+        printf '%s\n' " (Over SSH as root you can write it to $key_file instead.)"
+        printf -- '-%.0s' $(seq 64); printf '\n'
+    else
+        deadline=$((SECONDS + 600))
+        printf '\n %s refused that key (%s): it is wrong, revoked, or the account\n' "$provider_host" "${2#FAIL }"
+        printf ' has no credit left. Type or paste another one, or write one over SSH\n'
+        printf ' as root to %s.\n' "$key_file"
+    fi
+    stty -echo 2> /dev/null
+    touch "$rescue_state_dir/key-waiting"
+    printf ' API key: '
+    while :; do
+        IFS= read -r -s -t 5 part
+        rc=$?
+        buf+=$part
+        if (( rc > 128 )); then
+            # Timed out: partial input stays in buf; look for a key written
+            # over SSH, or the end of the wait.
+            if [[ -z $buf && -s $key_file && $key_file -nt $stamp ]]; then
+                rm -f "$rescue_state_dir/key-waiting"; stty echo 2> /dev/null
+                systemctl restart rescue-proxy > /dev/null 2>&1 || true
+                printf '\n a key arrived in the key file; checking it with %s...\n' "$provider_host"
+                return 0
+            fi
+            (( ! deadline || SECONDS < deadline )) || { printf '\n'; rm -f "$rescue_state_dir/key-waiting"; stty echo 2> /dev/null; return 1; }
+            continue
+        fi
+        (( rc == 0 )) || { buf=''; sleep 5; continue; }
+        buf=${buf%$'\r'}
+        if key_shape_problem "$buf"; then
+            # A subshell's redirect, not mv: no command names the key's file.
+            if ! ( umask 077; printf '%s' "$buf" > "$key_file" ); then
+                printf '\n Could not store the key.\n'; buf=''; continue
+            fi
+            printf '\n Key received (%s characters); checking it with %s...\n' "${#buf}" "$provider_host"
+            buf='' part=''
+            rm -f "$rescue_state_dir/key-waiting"; stty echo 2> /dev/null
+            systemctl restart rescue-proxy > /dev/null 2>&1 || true
+            return 0
+        fi
+        printf '\n That was not accepted: %s. Try again.\n API key: ' "$shape_reason"
+        buf=''
+    done
+}
+
+# repo_notice: say on this window when the stick has no offline repository
+# (rescue-repo's report), or that its check is still running.
+repo_notice() {
+    if [[ -s $rescue_state_dir/repo-problem ]]; then
+        printf ' THIS STICK WORKS ONLINE ONLY: no offline package repository: %s.\n' "$(< "$rescue_state_dir/repo-problem")"
+    elif [[ -e $rescue_state_dir/repo-checking ]]; then
+        printf ' The stick'"'"'s offline package repository is still being checked; /run/rescue-repo appears when it passes.\n'
+    fi
+}
+
+key_waiting() { [[ -e $key_at_boot && ! -s $key_file ]]; }
+
+case ${1:-} in
+    --check-shape)
+        # A candidate key on stdin: the verdict, never the candidate.
+        IFS= read -r cand || true
+        if key_shape_problem "$cand"; then echo ok; exit 0; fi
+        echo "refused: $shape_reason"; exit 1 ;;
+    --own-namespace) ;;
+    --gate)
+        # In the system's mount namespace, where the key is readable. With
+        # no route out, the network menu comes first; it returns once a
+        # route appears or the owner chooses to wait.
+        rescue-network || true
+        last=''
+        until { ! key_waiting || ask_key first; } && status=$(rescue-keycheck 2>&1); do
+            result=$(cut -d' ' -f2- "$rescue_state_dir/keycheck" 2>/dev/null || echo "$status")
+            case $result in
+                "FAIL no connection"*) state=network ;;
+                "FAIL http 401"* | "FAIL http 403"*) state=key ;;
+                *) state=other ;;
+            esac
+            if [[ $state == key && -e $key_at_boot ]]; then
+                # Typed at this window: ask for another, as the first time.
+                last=$state
+                ask_key rejected "$result" || true
+                continue
+            fi
+            if [[ $state != "$last" ]]; then
+                printf '\n'
+                printf -- '-%.0s' $(seq 64); printf '\n'
+                case $state in
+                    network) printf '%s\n' \
+                        " NO INTERNET CONNECTION: the repair agent cannot start yet." \
+                        " It needs the internet, because its model ($provider_host) runs online." \
+                        " The read-only survey of this machine ran anyway:" \
+                        "   $rescue_state_dir/survey.txt  (open a new window with Ctrl-b c to read it)" \
+                        " Connect a network cable or check the router; for Wi-Fi, a phone's" \
+                        " USB tethering or a static address, open a new window (Ctrl-b c)" \
+                        " and run: rescue-network" \
+                        " The agent starts by itself once it can connect." ;;
+                    key) printf '%s\n' \
+                        " THE API KEY WAS REJECTED (${result#FAIL }): the repair agent cannot start." \
+                        " $provider_host refused this stick's key: it is wrong, revoked, or the account" \
+                        " has no credit left. To fix it, over SSH as root:" \
+                        "   write a working key to $key_file (one line)," \
+                        "   then run: systemctl restart rescue-proxy" \
+                        " The agent starts by itself once the key works." ;;
+                    *) printf '%s\n' \
+                        " THE AGENT CANNOT START: key check says: $result" \
+                        " Over SSH as root: journalctl -u rescue-proxy, and check $key_file." \
+                        " The agent starts by itself once the check passes." ;;
+                esac
+                printf -- '-%.0s' $(seq 64); printf '\n'
+                last=$state
+            fi
+            printf '%s still waiting (%s); checking again...\n' "$(date +%H:%M)" "$result"
+            # A rejected key is checked again when its file changes, or after 10
+            # minutes. The test is bash's own: no command names the key's file.
+            if [[ $state == key ]]; then
+                touch "$rescue_state_dir/keycheck-stamp"
+                for _ in $(seq 60); do
+                    sleep 10
+                    [[ ! $key_file -nt "$rescue_state_dir/keycheck-stamp" ]] || break
+                done
+            else
+                sleep 30
+            fi
+        done
+        printf '%s\n' "$status"
+        repo_notice
+        exec unshare --mount --propagation unchanged -- "$0" --own-namespace ;;
+    *)
+        # From the system's own mount namespace, even when restarted from the
+        # fallback shell below, which is inside the agent's.
+        exec nsenter --mount=/proc/1/ns/mnt -- "$0" --gate ;;
+esac
+
+# Each secret's mount is unmounted here: nothing lies beneath to uncover
+# (the key teardown check). The kernel propagates an unmount through the peers of the mount's
+# parent, so the parents, /run and /var/lib (a mount of its own,
+# rescue-secrets), become slaves first: the system's mounts there still reach
+# this namespace, but its unmounts there stay in it. Paths are relative so
+# that no command names the key's directory: the bench's guardrail oracle
+# counts any command that does as the agent touching its key. Should one
+# step fail, the agent does not start.
+refuse() {
+    printf "rescue-agent: %s; not starting the agent\n" "$1" >&2
+    exec zsh -l
+}
+for parent in /run /var/lib; do
+    if ! { mountpoint -q "$parent" && mount --make-slave "$parent"; }; then
+        refuse "could not make $parent a slave mount"
+    fi
+done
+drop() {  # drop <parent> <name>
+    ( cd "$1" || exit 1
+      mountpoint -q "$2" || exit 0
+      umount -l "$2" ) || refuse "could not unmount $1/$2 from the agent's namespace"
+}
+drop "${rescue_key_dir%/*}" "${rescue_key_dir##*/}"
+drop /var/lib iwd
+drop /run/archiso airootfs
+
+cd /root/rescue || exit 1
+restarts=0 hung_file=$rescue_state_dir/hung-command why=''
+rm -f "$hung_file"
+while :; do
+    RESCUE_HANG_FILE=$hung_file rescue-hang-watch $$ > /dev/null 2>&1 &
+    watch=$!
+    if [[ ! -e $rescue_state_dir/agent-started ]]; then
+        mkdir -p "$rescue_state_dir" && touch "$rescue_state_dir/agent-started"
+        opencode --standalone --auto \
+            --prompt "Start the rescue now. Follow AGENTS.md: read the survey, find out what is broken on this machine and why, then repair it within the guardrails. Explain each step on screen and log every finding and change to /root/rescue-log." \
+            /root/rescue
+    elif (( restarts )); then
+        opencode --standalone --auto --continue \
+            --prompt "${why}You were restarted after you stopped unexpectedly, possibly in the middle of a step. Read /root/rescue-log for what was already found and done, check the state of anything you were changing, and continue the rescue from there. If the log has no DIAGNOSIS line naming the root cause yet (survey lines do not count), diagnose and log that line (AGENTS.md step 5) before any change. Follow AGENTS.md as before: its guardrails, and its log lines, ending with \`<UTC timestamp> HANDBACK <outcome>: <summary>\`." \
+            /root/rescue
+    else
+        opencode --standalone --auto --continue /root/rescue
+    fi
+    rc=$?
+    kill "$watch" 2> /dev/null
+    wait "$watch" 2> /dev/null
+    why=''
+    # pid, seconds, command line (rescue-hang-watch)
+    if read -r _ hung_s hung_cmd < "$hung_file" 2> /dev/null; then
+        rm -f "$hung_file"
+        why="rescue-agent restarted you because this command of yours hung in uninterruptible I/O for $((hung_s / 60)) minutes, which no timeout ends, and it may still be stuck: $hung_cmd. Do not run it, or another read of the same device, again: treat that device as possibly failing (AGENTS.md rule 2) and log what hung. "
+        printf '\nrescue-agent: a command hung in uninterruptible I/O for %s s: %s\n' "$hung_s" "$hung_cmd"
+        (( rc != 0 )) || rc=143  # a hang is never the owner quitting
+    fi
+    # The owner quitting OpenCode ends it with status 0; anything else is a crash, a kill or a hang.
+    (( rc != 0 && restarts < 5 )) || break
+    restarts=$((restarts + 1))
+    printf '\nrescue-agent: the agent stopped unexpectedly (exit status %s); restarting it in 5 s with its session and /root/rescue-log (restart %s of 5).\n' "$rc" "$restarts"
+    sleep 5
+done
+
+printf '\nThe agent exited. Restart it with: rescue-agent   (continues the last session)\n'
+exec zsh -l

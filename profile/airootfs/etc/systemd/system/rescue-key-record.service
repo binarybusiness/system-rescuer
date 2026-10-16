@@ -1,0 +1,13 @@
+[Unit]
+Description=Take the API key and SSH key from the stick's record (a key-less image)
+After=rescue-secrets.service
+Wants=rescue-secrets.service
+Before=rescue-proxy.service sshd.service getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash /usr/local/bin/rescue-key-record
+
+[Install]
+WantedBy=multi-user.target

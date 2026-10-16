@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Unlock a LUKS container with the owner's passphrase, out of the agent's
+# reach: open a window "unlock" in tmux session rescue (on tty1) where the
+# owner types the passphrase at cryptsetup's own prompt. The passphrase never
+# passes through the agent, its questions, argv or a log (brief, rule 6).
+#
+#   rescue-unlock <device> <name>        read-only, for diagnosis (rule 1)
+#   rescue-unlock --rw <device> <name>   read-write, for an approved repair
+#
+# Every disk starts read-only at the block layer; --rw first makes the disks
+# under <device> writable (blockdev --setrw), since the repair it serves was
+# OKed. Never use --rw on a failing disk (rule 2).
+#
+# It returns at once: then ask the owner to type the passphrase in the window
+# that opened and to answer once it has closed, and check /dev/mapper/<name>.
+# To go from read-only to read-write, unmount and `cryptsetup close <name>`
+# first; the owner types the passphrase again.
+set -euo pipefail
+
+if [[ ${1:-} == --window ]]; then
+    # Inside the unlock window: explain, ask cryptsetup, report, close.
+    mode=$2 dev=$3 name=$4
+    printf '\nThe repair agent needs the passphrase of %s (LUKS) to %s.\n' "$dev" \
+        "$([[ $mode == rw ]] && echo "repair it, with your OK" || echo "read it (read-only)")"
+    printf 'Type it here: it is not shown, logged or given to the agent.\n\n'
+    rc=0 ro=()
+    [[ $mode == ro ]] && ro=(--readonly)
+    cryptsetup open "${ro[@]}" --tries 3 "$dev" "$name" || rc=$?
+    mkdir -p /run/rescue && echo "$rc" > "/run/rescue/unlock-$name.rc"
+    if (( rc == 0 )); then printf '\nUnlocked as /dev/mapper/%s. This window closes now.\n' "$name"
+    else printf '\nNot unlocked (cryptsetup exit %d). This window closes now.\n' "$rc"; fi
+    sleep 3
+    exit 0
+fi
+
+mode=ro
+[[ ${1:-} == --rw ]] && { mode=rw; shift; }
+(( $# == 2 )) || { echo "usage: rescue-unlock [--rw] <device> <name>" >&2; exit 2; }
+dev=$1 name=$2
+[[ -b $dev ]] || { echo "rescue-unlock: $dev is not a block device" >&2; exit 1; }
+cryptsetup isLuks "$dev" || { echo "rescue-unlock: $dev is not a LUKS container" >&2; exit 1; }
+[[ $name =~ ^[A-Za-z0-9._-]+$ ]] || { echo "rescue-unlock: name the mapping with letters, digits, . _ or -" >&2; exit 1; }
+if [[ -e /dev/mapper/$name ]]; then
+    echo "rescue-unlock: /dev/mapper/$name is already open; cryptsetup close $name first to reopen it" >&2
+    exit 1
+fi
+tmux has-session -t rescue 2>/dev/null || { echo "rescue-unlock: no tmux session rescue on tty1" >&2; exit 1; }
+rm -f "/run/rescue/unlock-$name.rc"
+if [[ $mode == rw ]]; then
+    while read -r disk type; do
+        [[ $type == disk ]] || continue
+        blockdev --setrw "/dev/$disk"
+        echo "rescue-unlock: /dev/$disk is now writable (blockdev --setrw) for the approved repair"
+    done < <(lsblk -snro NAME,TYPE "$dev")
+fi
+tmux new-window -t rescue: -n unlock "$(printf '%q ' "$0" --window "$mode" "$dev" "$name")"
+cat <<EOF
+A window "unlock" is now open on the owner's screen (tty1), with cryptsetup
+asking for the passphrase of $dev ($([[ $mode == rw ]] && echo read-write || echo read-only)).
+Ask the owner to type the passphrase there and to answer you once the window
+has closed; never ask for the passphrase itself. Then check that
+/dev/mapper/$name exists; /run/rescue/unlock-$name.rc holds cryptsetup's exit
+status (0: unlocked).
+EOF

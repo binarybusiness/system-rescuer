@@ -1,0 +1,18 @@
+[Unit]
+Description=Model API proxy that adds the repair agent's key (127.0.0.1:8484)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# nginx's pid file; the key and the header live in /run/.rescue-key.
+RuntimeDirectory=rescue-proxy
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/local/bin/rescue-proxy-conf
+ExecStart=/usr/bin/nginx -c /etc/rescue-proxy/nginx.conf -g "daemon off;"
+ExecReload=/usr/local/bin/rescue-proxy-conf
+ExecReload=/usr/bin/nginx -c /etc/rescue-proxy/nginx.conf -s reload
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

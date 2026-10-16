@@ -1,0 +1,17 @@
+# Test-only ISO (scenarios C6, C7 and C9, tests/bench/no-dhcp-overlay): the
+# machine's own wired NICs (virtio here) with DHCP and router advertisements
+# off, so no address or route arrives on its own. It sorts before the shipping
+# 20-ethernet.network, which still matches every other wired NIC, such as a
+# phone's USB tethering (C9), so the phone is picked up as on the stick.
+[Match]
+Type=ether
+Driver=virtio_net
+Kind=!*
+
+[Link]
+RequiredForOnline=routable
+
+[Network]
+DHCP=no
+IPv6AcceptRA=no
+MulticastDNS=yes

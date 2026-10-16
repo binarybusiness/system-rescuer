@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# rescue-network: the console's network menu. When this live system has no
+# default route, the repair agent cannot reach its model, so rescue-agent runs
+# this on tty1 before the agent starts; the owner can also run it in a new
+# window (Ctrl-b c) at any time. It offers a phone's USB tethering, a static
+# address on a wired NIC, a Wi-Fi network, or waiting for a cable or the
+# router, and returns as soon as a default route appears, whichever way it came.
+#
+#   rescue-network     # the menu; exit 0 once online, 1 if the owner chose to wait
+#
+# A static address goes into /run/systemd/network, and a Wi-Fi network's
+# profile into iwd's /var/lib/iwd (this live system only, gone at reboot);
+# nothing is written to the machine being repaired. The Wi-Fi password is
+# typed at iwctl's own prompt with the terminal's echo off from before iwctl
+# starts (iwctl itself would show stars, but echoes keys typed before its
+# prompt is ready): it never reaches this script, the screen, a command line
+# or a log, and the repair agent's mount namespace hides iwd's profiles
+# (rescue-agent).
+set -uo pipefail
+
+online() { [[ -n $(ip -4 route show default 2>/dev/null) || -n $(ip -6 route show default 2>/dev/null) ]]; }
+online && exit 0
+
+# The menu waits on the keyboard; a watcher ends it the moment a route appears
+# (DHCP after all, a cable, a phone).
+trap 'printf "\nrescue-network: the network is up.\n"; exit 0' USR1
+( while sleep 3; do online && { kill -USR1 $$ 2>/dev/null; exit 0; }; done ) &
+watcher=$!
+trap 'kill "$watcher" 2>/dev/null; stty echo 2>/dev/null' EXIT
+
+rule() { printf -- '-%.0s' $(seq 64); printf '\n'; }
+is_ipv4() {
+    local IFS=. o
+    [[ $1 =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    for o in $1; do (( 10#$o <= 255 )) || return 1; done
+}
+
+# Wired links (systemd-networkd's type "ether") that have no IPv4 address.
+bare_ether_links() {
+    local link
+    networkctl list --no-legend --no-pager 2>/dev/null | awk '$3 == "ether" {print $2}' | while read -r link; do
+        [[ -n $(ip -4 -brief address show dev "$link" 2>/dev/null | awk '{print $3}') ]] || printf '%s\n' "$link"
+    done
+}
+
+static_address() {
+    local links link addr gw dns conf
+    mapfile -t links < <(bare_ether_links)
+    case ${#links[@]} in
+        0) printf 'No wired network card without an address was found (ip -brief link lists them).\n'; return 1 ;;
+        1) link=${links[0]} ;;
+        *) printf 'Wired cards without an address: %s\n' "${links[*]}"
+           read -r -p 'Which one? ' link
+           [[ " ${links[*]} " == *" $link "* ]] || { printf 'No card %s.\n' "$link"; return 1; } ;;
+    esac
+    printf 'Static address for %s (ask whoever runs the network, or read it off the router).\n' "$link"
+    read -r -p 'Address with prefix length, e.g. 192.168.1.50/24: ' addr
+    # Split before is_ipv4, whose own match replaces BASH_REMATCH.
+    local ip=${addr%/*} prefix=${addr##*/}
+    if [[ $addr != */* || ! $prefix =~ ^[0-9]{1,2}$ ]] || ! is_ipv4 "$ip" || (( 10#$prefix < 1 || 10#$prefix > 32 )); then
+        printf 'Not an address with a prefix length: %s\n' "$addr"; return 1
+    fi
+    addr=$ip/$((10#$prefix))
+    read -r -p 'Gateway (the router), e.g. 192.168.1.1: ' gw
+    is_ipv4 "$gw" || { printf 'Not an address: %s\n' "$gw"; return 1; }
+    read -r -p "DNS server [$gw]: " dns
+    dns=${dns:-$gw}
+    is_ipv4 "$dns" || { printf 'Not an address: %s\n' "$dns"; return 1; }
+    conf=/run/systemd/network/10-rescue-static-$link.network
+    mkdir -p /run/systemd/network
+    printf '[Match]\nName=%s\n\n[Link]\nRequiredForOnline=routable\n\n[Network]\nAddress=%s\nGateway=%s\nDNS=%s\n' \
+        "$link" "$addr" "$gw" "$dns" > "$conf"
+    if ! networkctl reload || ! networkctl reconfigure "$link"; then
+        printf 'systemd-networkd did not take the address (journalctl -u systemd-networkd).\n'; return 1
+    fi
+    printf 'Set %s on %s, gateway %s, DNS %s; waiting for the route...\n' "$addr" "$link" "$gw" "$dns"
+    for _ in $(seq 20); do online && return 0; sleep 1; done
+    printf 'No route yet: check the cable and the numbers (ip -brief address, ip route).\n'
+    return 1
+}
+
+# iwctl's tables carry colour codes; this strips them for matching.
+plain() { sed 's/\x1b\[[0-9;]*m//g'; }
+
+wifi() {
+    local devs dev ssid
+    mapfile -t devs < <(networkctl list --no-legend --no-pager 2>/dev/null | awk '$3 == "wlan" {print $2}')
+    case ${#devs[@]} in
+        0) printf 'No Wi-Fi card was found (ip -brief link lists the cards).\n'; return 1 ;;
+        1) dev=${devs[0]} ;;
+        *) printf 'Wi-Fi cards: %s\n' "${devs[*]}"
+           read -r -p 'Which one? ' dev
+           [[ " ${devs[*]} " == *" $dev "* ]] || { printf 'No card %s.\n' "$dev"; return 1; } ;;
+    esac
+    rfkill unblock wifi 2>/dev/null || true
+    printf 'Looking for Wi-Fi networks with %s...\n' "$dev"
+    iwctl station "$dev" scan > /dev/null 2>&1 || true
+    for _ in $(seq 15); do
+        sleep 1
+        iwctl station "$dev" show 2>/dev/null | plain | grep -qE 'Scanning +no' && break
+    done
+    iwctl station "$dev" get-networks
+    read -r -p 'Network name, as listed (Enter to go back): ' ssid
+    [[ -n $ssid ]] || return 1
+    printf 'Connecting to %s; type its password when asked (nothing shows as you type).\n' "$ssid"
+    stty -echo 2>/dev/null
+    iwctl station "$dev" connect "$ssid"
+    local rc=$?
+    stty echo 2>/dev/null
+    if (( rc != 0 )); then
+        printf 'Could not connect to %s: check the name and the password, and try again.\n' "$ssid"; return 1
+    fi
+    printf 'Connected to %s; waiting for an address...\n' "$ssid"
+    for _ in $(seq 30); do online && return 0; sleep 1; done
+    printf 'Connected, but no address came yet (ip -brief address; iwctl station %s show).\n' "$dev"
+    return 1
+}
+
+tethering() {
+    printf '%s\n' \
+        "Connect the phone with its USB cable, then:" \
+        "  Android: Settings > Network & internet > Hotspot & tethering > USB tethering." \
+        "  iPhone:  Settings > Personal Hotspot on, then tap Trust on the phone." \
+        "The phone appears as a wired network card and is picked up by itself." \
+        "Waiting for it; press Enter to go back to the menu."
+    read -r _
+}
+
+while :; do
+    printf '\n'; rule
+    printf '%s\n' \
+        " NO NETWORK: no address came from the network, so the repair agent" \
+        " cannot start yet (its model, $(sed -n 's/^host=//p' /etc/rescue/provider.conf 2>/dev/null), runs online)." \
+        " Choose how to connect this machine:" \
+        "   1) a phone's USB tethering" \
+        "   2) a static address on a network cable" \
+        "   3) Wi-Fi" \
+        "   4) keep waiting (plug in a cable, or check the router)" \
+        " The menu closes by itself as soon as the network is up."
+    rule
+    read -r -p 'Choice [1-4]: ' choice
+    case $choice in
+        1) tethering ;;
+        2) static_address && { printf 'rescue-network: the network is up.\n'; exit 0; } ;;
+        3) wifi && { printf 'rescue-network: the network is up.\n'; exit 0; } ;;
+        4) printf 'Waiting. For this menu again, open a new window (Ctrl-b c) and run: rescue-network\n'; exit 1 ;;
+        *) printf 'Type 1, 2, 3 or 4.\n' ;;
+    esac
+done

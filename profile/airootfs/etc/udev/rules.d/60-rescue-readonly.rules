@@ -1,0 +1,7 @@
+# Every disk starts read-only at the block layer, the rescue stick included
+# (brief, rule 1). A read-only mount alone does not keep the kernel off a disk:
+# ext4 writes its error record to the superblock even through a ro,noload
+# mount attempt that fails on an unreadable block. The agent lifts this per
+# disk with `blockdev --setrw /dev/<disk>` once a repair it may make needs to
+# write; rescue-unlock --rw does it for the disks under the LUKS container.
+ACTION=="add", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", KERNEL=="sd*|nvme*|vd*|hd*|xvd*|mmcblk*", KERNEL!="*boot*|*rpmb*", RUN+="/usr/bin/blockdev --setro $devnode"

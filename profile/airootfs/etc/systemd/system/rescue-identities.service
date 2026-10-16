@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Create the host identities that package scriptlets would otherwise create in
+# the image build chroot. This runs before storage and braille services use
+# them, so every booted machine receives its own identities.
+[Unit]
+Description=Create this machine's storage and braille identities
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target nvmf-autoconnect.service iscsid.service iscsid.socket brltty.path
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/rescue-identities
+
+[Install]
+WantedBy=sysinit.target

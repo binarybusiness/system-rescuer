@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Create machine-specific files which nvme-cli, open-iscsi and brltty normally
+# generate in package post-install scriptlets. The build hook removes the
+# chroot's copies, and this service recreates them on every boot.
+set -euo pipefail
+
+umask 022
+rm -f /etc/nvme/hostnqn /etc/nvme/hostid /etc/iscsi/initiatorname.iscsi /etc/brlapi.key
+
+nvme gen-hostnqn > /etc/nvme/hostnqn
+uuidgen > /etc/nvme/hostid
+printf 'InitiatorName=%s\n' "$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi
+brltty-genkey

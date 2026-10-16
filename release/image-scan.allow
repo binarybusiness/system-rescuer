@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Reviewed findings of release/image-leak-check.sh that remain after package
+# files identical to their package's record have left the scan. One entry per
+# line, tab separated:
+#   <category> <image path glob> <reason> [hook:<package> | pacman-db]
+# Without the fourth field the path must be one a package owns, and the
+# category ssh-public-key, key-token or gitleaks:<rule>. hook:<package> covers
+# a path no package owns that the package's libalpm hook generates; pacman-db
+# covers pacman's record of an installed package; only these may also allow a
+# denylist finding. The glob is matched against the path inside the image's
+# root file system, never one from profile/airootfs or the configuration. Keep
+# it as short as the clean build allows, each entry with its reason.
+gitleaks:private-key	usr/share/mime/magic	update-mime-database's compiled magic, made from shared-mime-info's PEM private-key header patterns; no key body	hook:shared-mime-info
+gitleaks:private-key	usr/share/mime/mime.cache	update-mime-database's compiled cache, made from the same patterns	hook:shared-mime-info
+denylist	usr/lib/modules/*/modules.alias	depmod's table of the kernel's module names, one of which matches a denylisted word	hook:kmod
+denylist	usr/lib/modules/*/modules.dep	depmod's dependency table of the same module names	hook:kmod
+denylist	var/lib/pacman/local/linux-[0-9]*/files	pacman's file list of the kernel package, naming that module	pacman-db

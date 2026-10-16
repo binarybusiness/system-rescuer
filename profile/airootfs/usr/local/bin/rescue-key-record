@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# rescue-key-record.service, early at boot on an image built with no key
+# (rescue-secrets left /run/rescue/key-at-boot): read the record that
+# install.sh --prebuilt wrote past the image on the stick, so that the stick
+# rescues unattended. With no record, or a record that is not usable,
+# nothing is applied and tty1 asks for the key as before (rescue-agent says
+# why in the second case). An image with a key built in has no marker and
+# ignores any record.
+#
+# The record is at the first 1 MiB boundary past the image's end, found by
+# looking at each of the next 8 boundaries from the end of the ISO 9660
+# volume (the file the installer measured is a little longer than the volume):
+#   RSCKEY0n | 8 ASCII digits (length of the content) | content
+#   RSCKEY01  the content is the API key alone (the layout spike's)
+#   RSCKEY02  the content is lines of name=value, each at most once but ssh:
+#               key=<API key>              required
+#               ssh=<SSH public key line>  root's authorized_keys, repeatable
+#               endpoint=<https URL>       replaces provider.conf's url
+#               key_prefix=<text>          replaces provider.conf's key_prefix
+# The boot stick is found by usr/local/lib/rescue-stick-find.sh (the disk that
+# holds the volume archiso searched for, which survives copy to RAM;
+# RESCUE_RECORD_DEV names it for a test). The key goes from the device into a
+# shell variable and from there by redirect into /run/.rescue-key: never argv,
+# a file elsewhere, the journal or the output, which carries lengths only.
+# Applied all or nothing.
+set -uo pipefail
+export LC_ALL=C
+umask 077
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-paths.sh
+. /usr/local/lib/rescue-paths.sh
+key_dir=$rescue_key_dir
+key_file=$rescue_key_file
+state=$rescue_state_dir
+provider=$rescue_provider_conf
+mib=1048576
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-stick-find.sh
+. /usr/local/lib/rescue-stick-find.sh
+
+mkdir -p "$state"
+[[ -e $rescue_key_at_boot ]] || exit 0
+[[ ! -s $key_file ]] || exit 0
+rm -f "$state/key-from-record" "$state/record-problem"
+
+# problem <reason>: the record is there and cannot be used.
+problem() {
+    printf '%s\n' "$1" > "$state/record-problem"
+    printf 'rescue-key-record: the key record is not usable: %s\n' "$1"
+    exit 0
+}
+
+dev=$(rescue_boot_disk) || { echo "rescue-key-record: no boot disk found; no record"; exit 0; }
+[[ -r $dev ]] || { echo "rescue-key-record: $dev is not readable; no record"; exit 0; }
+
+# The end of the ISO 9660 volume, from its primary volume descriptor.
+end=$(rescue_volume_end "$dev") || { echo "rescue-key-record: no ISO 9660 volume on $dev; no record"; exit 0; }
+if found=$(rescue_scan_past "$dev" "$end" '^RSCKEY0[12][0-9]{8}$'); then
+    off=${found%% *} head=${found#* }
+else
+    echo "rescue-key-record: no record on $dev; tty1 asks for the key"
+    exit 0
+fi
+magic=${head:0:8} len=$((10#${head:8:8}))
+(( len > 0 && len <= mib - 16 )) || problem "its length field says $len bytes (a record holds 1 to $((mib - 16)))"
+content=$(dd if="$dev" iflag=skip_bytes,count_bytes skip=$((off + 16)) count="$len" bs=64k status=none 2> /dev/null | tr -d '\000'; printf x)
+content=${content%x}
+(( ${#content} == len )) || problem "it is shorter than its length field or holds a zero byte"
+echo "rescue-key-record: found a $magic record of $len bytes at byte $off of $dev"
+
+key='' endpoint='' prefix='' prefix_set=0
+ssh_keys=()
+case $magic in
+    RSCKEY01) key=${content%$'\n'} ;;
+    RSCKEY02)
+        declare -A seen=()
+        while IFS= read -r line || [[ -n $line ]]; do
+            [[ -n $line ]] || continue
+            name=${line%%=*}
+            [[ $line == *=* ]] || problem "a line has no name=value form"
+            val=${line#*=}
+            if [[ $name != ssh && -n ${seen[$name]:-} ]]; then problem "$name appears twice"; fi
+            seen[$name]=1
+            case $name in
+                key) key=$val ;;
+                ssh) ssh_keys+=("$val") ;;
+                endpoint) endpoint=$val ;;
+                key_prefix) prefix=$val prefix_set=1 ;;
+                *) problem "a line names '$name', which this image does not know" ;;
+            esac
+        done <<< "$content"
+        ;;
+esac
+unset content
+
+# The provider as this image has it, and as the record would change it.
+cur_url=$(sed -n 's/^url=//p' "$provider" 2> /dev/null)
+cur_prefix=$(sed -n 's/^key_prefix=//p' "$provider" 2> /dev/null)
+new_url=$cur_url
+if [[ -n $endpoint ]]; then
+    [[ $endpoint =~ ^https://([A-Za-z0-9.-]+(:[0-9]{1,5})?)(/[A-Za-z0-9._~/-]*)?$ ]] \
+        || problem "endpoint is not a plain https://host[:port][/path] URL"
+    new_url=https://${BASH_REMATCH[1]}${BASH_REMATCH[3]%/}
+fi
+[[ $prefix =~ ^[A-Za-z0-9_.-]*$ ]] || problem "key_prefix has characters a key prefix does not"
+want_prefix=$cur_prefix
+# Another provider's keys need not start with this image's prefix.
+if (( prefix_set )); then want_prefix=$prefix
+elif [[ -n $endpoint && $new_url != "$cur_url" ]]; then want_prefix=''
+fi
+
+[[ -n $key ]] || problem "it holds no key"
+if [[ $key =~ [[:space:]] ]]; then problem "the key has a space or tab in it"
+elif (( ${#key} < 20 )); then problem "the key is too short (${#key} characters; a key has at least 20)"
+elif [[ ! $key =~ ^[A-Za-z0-9_.-]+$ ]]; then problem "the key has characters a key does not (only letters, digits, - _ . are taken)"
+elif [[ -n $want_prefix && $key != "$want_prefix"* ]]; then problem "the key does not start with $want_prefix"
+fi
+for line in "${ssh_keys[@]}"; do
+    [[ $line =~ ^(ssh-|ecdsa-|sk-)[A-Za-z0-9@.-]*\ [A-Za-z0-9+/=]+(\ .*)?$ ]] \
+        || problem "an ssh line is not an SSH public key"
+    ssh-keygen -l -f <(printf '%s\n' "$line") > /dev/null 2>&1 \
+        || problem "an ssh line is not an SSH public key"
+done
+
+# Applied: the key by redirect, with no command naming its file.
+[[ -d $key_dir ]] || problem "$key_dir is not there (rescue-secrets.service did not run)"
+if ! ( printf '%s' "$key" > "$key_file" ); then problem "the key could not be stored"; fi
+klen=${#key}
+unset key
+
+if (( ${#ssh_keys[@]} )); then
+    install -d -m 700 /root/.ssh
+    for line in "${ssh_keys[@]}"; do printf '%s\n' "$line" >> /root/.ssh/authorized_keys; done
+    chmod 600 /root/.ssh/authorized_keys
+fi
+new_host=${new_url#https://} new_host=${new_host%%/*} new_host=${new_host%%:*}
+cur_host=$(sed -n 's/^host=//p' "$provider")
+{
+    while IFS= read -r line || [[ -n $line ]]; do
+        case $line in
+            url=*) printf 'url=%s\n' "$new_url" ;;
+            host=*) printf 'host=%s\n' "$new_host" ;;
+            key_prefix=*) printf 'key_prefix=%s\n' "$want_prefix" ;;
+            # The image's CA vouches for the image's provider only.
+            ca_file=*) [[ $new_host != "$cur_host" ]] || printf '%s\n' "$line" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done < "$provider"
+} > "$provider.new" && mv -f "$provider.new" "$provider"
+chmod 644 "$provider"
+printf '%s\n' "$magic" > "$state/key-from-record"
+printf 'rescue-key-record: the key (%s characters) is in place; %s ssh key(s) installed; provider %s\n' \
+    "$klen" "${#ssh_keys[@]}" "$new_url"

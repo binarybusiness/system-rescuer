@@ -1,0 +1,5 @@
+# Filesystem UUIDs that identify this machine; rescue-survey matches any of
+# them (blkid -s UUID -o value). These are the qemu test disk's
+# (tests/make-fixture.sh with this profile); put your machine's here.
+6b1d7c2e-0a4f-4c8e-9d3b-5e2f1a7c9d40
+5E2F-1A7C

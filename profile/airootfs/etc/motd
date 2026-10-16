@@ -1,0 +1,9 @@
+system-rescuer live system (hostname: rescue)
+
+The repair agent runs in tmux session "rescue" on tty1.
+  Watch or help:   tmux attach -t rescue
+  Restart agent:   rescue-agent        (continues the last session)
+  No key on stick: tty1 asks for it; or over SSH write it to /run/.rescue-key/deepseek-key
+  Key check:       rescue-keycheck   (model API: /etc/rescue/provider.conf)
+  Machine survey:  rescue-survey       (writes /run/rescue/survey.txt)
+  Brief and files: /root/rescue/AGENTS.md, playbooks.md, machines/<name>/

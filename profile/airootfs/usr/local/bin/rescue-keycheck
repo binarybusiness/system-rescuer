@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Check that the API key works: one authenticated GET to the model API's
+# models endpoint (from /etc/rescue/provider.conf), then the same through
+# rescue-proxy, the agent's only way to the API. Prints and records only the
+# HTTP status. The key reaches curl through a header file on a pipe, never
+# through argv.
+set -uo pipefail
+
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-paths.sh
+. /usr/local/lib/rescue-paths.sh
+key_file=$rescue_key_file
+result_file=$rescue_state_dir/keycheck
+url='' host='' ca=''
+while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+        url=*) url=${line#url=} ;;
+        host=*) host=${line#host=} ;;
+        ca_file=*) ca=${line#ca_file=} ;;
+    esac
+done < "$rescue_provider_conf"
+curl_ca=()
+[[ -z $ca ]] || curl_ca=(--cacert "$ca")
+mkdir -p "$rescue_state_dir"
+
+record() {
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$1" > "$result_file"
+    printf 'rescue-keycheck: %s\n' "$1"
+}
+
+if [[ ! -s $key_file ]]; then
+    record "FAIL no key file"
+    exit 1
+fi
+
+status=000
+for attempt in 1 2 3 4 5 6; do
+    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "${curl_ca[@]}" \
+        -H @<(printf 'Authorization: Bearer %s\n' "$(<"$key_file")") \
+        "$url/models" 2>/dev/null) || status=000
+    [[ $status == 000 ]] || break
+    sleep $((attempt * 5))
+done
+
+# The agent reaches the API only through rescue-proxy.service, which adds the
+# key; it starts once the network is online.
+proxy=000
+if [[ $status == 200 ]]; then
+    for _ in $(seq 20); do
+        proxy=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 http://127.0.0.1:8484/v1/models 2>/dev/null) || proxy=000
+        [[ $proxy == 200 ]] && break
+        sleep 3
+    done
+fi
+
+case $status in
+    200) if [[ $proxy == 200 ]]; then record "OK http 200 (through rescue-proxy: http 200)"; exit 0
+         else record "FAIL key OK (http 200) but rescue-proxy answers http $proxy"; exit 3; fi ;;
+    000) record "FAIL no connection to $host"; exit 2 ;;
+    *) record "FAIL http $status"; exit 1 ;;
+esac

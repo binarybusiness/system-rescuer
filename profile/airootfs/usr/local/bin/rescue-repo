@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Make the stick's offline package repository readable at /run/rescue-repo.
+# Run at boot by rescue-repo.service; the agent may run it again.
+#
+# 1. Inside the image: build.sh puts it on the ISO's file system as
+#    /rescue-repo, outside the root image. archiso leaves the stick mounted at
+#    /run/archiso/bootmnt, unless it copied the root image to RAM and unmounted
+#    it; then the stick is mounted here read-only, found by the UUID the boot
+#    loader passed (archisosearchuuid).
+# 2. Past the image: an image built with build.sh --repo-asset has none inside.
+#    install.sh --prebuilt wrote the repository as a second asset past the
+#    image (layout in lib/rescue-stick.sh): a header at the second 1 MiB after
+#    the image's end, RSCREPO1, 8 digits of length and lines of name=value
+#    (uuid=, size=, sha256=), and from the MiB after it an ISO 9660 file system
+#    with /rescue-repo. It is served only when its uuid= is this image's volume
+#    UUID and the asset's sha256 matches; it is mounted read-only from the stick
+#    at its offset (a loop device), never copied to RAM. The boot stick is found
+#    as rescue-key-record finds it (usr/local/lib/rescue-stick-find.sh).
+#
+# /run/rescue/repo-source says where it came from, and /run/rescue/repo-problem
+# why there is none (the stick then works online only; rescue-agent says so on
+# tty1). /run/rescue/repo-checking exists while the asset's checksum is read,
+# which takes a while and holds up nothing but this service.
+set -euo pipefail
+export LC_ALL=C
+# shellcheck source=profile/airootfs/usr/local/lib/rescue-stick-find.sh
+. /usr/local/lib/rescue-stick-find.sh
+
+link=/run/rescue-repo medium=/run/rescue-medium state=/run/rescue
+mib=1048576
+mkdir -p "$state"
+# One run at a time: a second waits for the first and then finds its link.
+exec 9> "$state/repo.lock"
+flock 9
+[[ -e $link/rescue.db ]] && exit 0
+rm -f "$state/repo-source" "$state/repo-problem" "$state/repo-checking"
+
+# none <reason>: no repository is usable; the stick works online only.
+none() {
+    printf '%s\n' "$1" > "$state/repo-problem"
+    rm -f "$state/repo-checking"
+    echo "rescue-repo: no offline repository: $1" >&2
+    exit 1
+}
+found() {
+    printf '%s\n' "$1" > "$state/repo-source"
+    rm -f "$state/repo-checking"
+    ln -sfn "$2" "$link"
+    echo "rescue-repo: $1"
+    exit 0
+}
+
+if [[ -d /run/archiso/bootmnt/rescue-repo ]]; then
+    found "inside the image" /run/archiso/bootmnt/rescue-repo
+fi
+uuid=$(sed -n 's/.*archisosearchuuid=\([^ ]*\).*/\1/p' /proc/cmdline)
+dev=''
+if [[ -n $uuid ]]; then
+    dev=$(blkid -t TYPE=iso9660 -U "$uuid" 2>/dev/null || true)
+    if [[ -b $dev ]]; then
+        mkdir -p "$medium"
+        mountpoint -q "$medium" || mount -o ro -t iso9660 "$dev" "$medium"
+        [[ ! -d $medium/rescue-repo ]] || found "inside the image" "$medium/rescue-repo"
+    fi
+fi
+
+# Past the image.
+disk=$(rescue_boot_disk) || none "the boot stick is not attached, so there is none on it"
+end=$(rescue_volume_end "$disk") || none "the boot stick has no ISO 9660 image"
+found_hdr=$(rescue_scan_past "$disk" "$end" '^RSCREPO1[0-9]{8}$') \
+    || none "this stick has no offline repository (none in the image, none written past it)"
+off=${found_hdr%% *} len=$((10#${found_hdr:$((${#found_hdr} - 8))}))
+(( len > 0 && len <= mib - 16 )) || none "the repository header on the stick is damaged (length field $len)"
+content=$(dd if="$disk" iflag=skip_bytes,count_bytes skip=$((off + 16)) count="$len" bs=64k status=none | tr -d '\000')
+h_uuid='' h_size='' h_sha=''
+while IFS= read -r line; do
+    case $line in
+        uuid=*) h_uuid=${line#uuid=} ;;
+        size=*) h_size=${line#size=} ;;
+        sha256=*) h_sha=${line#sha256=} ;;
+    esac
+done <<< "$content"
+[[ $h_size =~ ^[0-9]+$ && $h_sha =~ ^[0-9a-f]{64}$ && -n $h_uuid ]] \
+    || none "the repository header on the stick is damaged"
+mine=$(rescue_volume_uuid "$disk") || none "the image's volume UUID cannot be read"
+[[ $h_uuid == "$mine" ]] \
+    || none "the repository on the stick belongs to another image ($h_uuid, this one is $mine)"
+asset=$((off + mib))
+(( h_size > 0 && h_size % 512 == 0 )) || none "the repository header on the stick is damaged (size $h_size)"
+disk_size=$(blockdev --getsize64 "$disk" 2> /dev/null || echo 0)
+(( disk_size == 0 || asset + h_size <= disk_size )) || none "the repository on the stick is damaged (it runs past the end of the stick)"
+
+: > "$state/repo-checking"
+start=$SECONDS
+got=$(dd if="$disk" bs=1M iflag=skip_bytes,count_bytes skip="$asset" count="$h_size" status=none | sha256sum | cut -d' ' -f1)
+secs=$((SECONDS - start))
+printf '%s\n' "$secs" > "$state/repo-check-seconds"
+[[ $got == "$h_sha" ]] || none "the repository on the stick is damaged (its checksum differs from its header's)"
+
+mkdir -p "$medium-asset"
+mountpoint -q "$medium-asset" \
+    || mount -t iso9660 -o "ro,loop,offset=$asset,sizelimit=$h_size" "$disk" "$medium-asset" \
+    || none "the repository on the stick could not be mounted"
+[[ -e $medium-asset/rescue-repo/rescue.db ]] || none "the repository on the stick has no package database"
+found "past the image ($h_size bytes, checksum read in $secs s)" "$medium-asset/rescue-repo"

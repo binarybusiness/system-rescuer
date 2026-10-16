@@ -1,0 +1,4 @@
+[extend]
+useDefault = true
+
+# Add [[allowlists]] entries only for narrow, justified project exceptions.

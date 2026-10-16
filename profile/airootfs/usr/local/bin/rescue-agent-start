@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# tty1 autostart: wait for the network, survey the machine, then run the
+# repair agent in the tmux session "rescue" and attach tty1 to it. The agent
+# itself waits, with a plain message on this screen, until the network and its
+# API key work (rescue-agent); with no address after 60 s it first offers the
+# network menu (rescue-network).
+# Watch from another machine with: ssh root@<ip> -t tmux attach -t rescue
+set -uo pipefail
+
+if tmux has-session -t rescue 2>/dev/null; then
+    exec tmux attach-session -t rescue
+fi
+
+printf '\nsystem-rescuer: waiting for the network (up to 60 s)...\n'
+/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=60 || true
+ip -brief address | grep -v '^lo' || true
+printf 'hostname: %s\n' "$(uname -n)"
+
+# The command record (auditd's rescue-exec rule) is armed before the agent starts.
+for _ in $(seq 30); do auditctl -l 2>/dev/null | grep -q rescue-exec && break; sleep 1; done
+auditctl -l 2>/dev/null | grep -q rescue-exec || printf 'system-rescuer: the command record (audit rule rescue-exec) is not armed.\n'
+
+# The survey needs no network, so it runs whatever the network does.
+printf 'system-rescuer: surveying this machine (read-only)...\n'
+rescue-survey || true
+
+tmux new-session -d -s rescue -x "$(tput cols)" -y "$(tput lines)" -c /root/rescue /usr/local/bin/rescue-agent
+exec tmux attach-session -t rescue

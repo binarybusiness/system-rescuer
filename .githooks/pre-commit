@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+set -eu
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks is required; refusing to commit without secret scanning" >&2
+  exit 1
+fi
+
+exec gitleaks git --staged --redact --no-banner

@@ -1,0 +1,84 @@
+# Reviewed findings that tests/leak-check.sh does not report. One entry per
+# line: <category><TAB><path glob>, the glob relative to the scanned tree root
+# (or a history path name) and matched as a shell pattern. A bare glob is an
+# fs-uuid entry. Only the generic categories may be listed: private-ipv4,
+# private-ipv6, mac-address, email, home-path, rescue-key-path and fs-uuid.
+# An entry names one file or a narrow fixture directory, never a whole tree.
+# Blank lines and # comments are ignored. The owner's machine profiles live in
+# the private configuration (lib/rescue-config.sh), so none of these is a real
+# machine's UUID.
+
+# Generated test fixtures whose filesystem UUIDs are invented.
+fs-uuid	examples/config/machines/*
+fs-uuid	tests/make-fixture.sh
+fs-uuid	tests/bench/efi-vars.py
+fs-uuid	tests/spikes/stick-layout.sh
+
+# The demo recording's text (tests/demo/record.sh): made only in VMs, on a
+# bench disk, so its filesystem UUIDs and home paths are the bench's.
+fs-uuid	demo-frames.txt
+home-path	demo-frames.txt
+
+# Bench and fixture users (/home/bench, /home/owner, the VMs' build and walk users) and
+# the stand-in Windows profile: planted names inside test scripts, not people.
+home-path	tests/bench/tamper/protected-write.sh
+home-path	tests/bench/target.sh
+home-path	tests/install-vm.sh
+home-path	tests/install-vm/debian-vm.sh
+home-path	tests/make-fixture.sh
+home-path	tests/quickstart-vm.sh
+home-path	tests/scenarios/a10-root-full/break.sh
+home-path	tests/scenarios/b1-failing-disk/break.sh
+home-path	tests/with/win-standin.sh
+
+# qemu user-mode networks, the bench's own network namespace and the phone
+# tethering stand-in, plus placeholder addresses in an interactive prompt's
+# example text: none is a real machine's address.
+private-ipv4	profile/airootfs/usr/local/bin/rescue-network
+private-ipv4	tests/bench/no-dhcp-overlay/etc/systemd/network/10-bench-control.network
+private-ipv4	tests/bench/provider-stub.py
+private-ipv4	tests/bench/rescue.sh
+private-ipv4	tests/bench/wifi-ap.sh
+private-ipv4	tests/install-vm.sh
+private-ipv4	tests/qemu-boot.sh
+private-ipv4	tests/quickstart-vm.sh
+private-ipv4	tests/scenarios/c6-static-address/scenario.conf
+private-ipv4	tests/scenarios/c9-usb-tethering/scenario.conf
+private-ipv4	tests/scenario.sh
+
+# QEMU's locally administered MAC addresses for the bench's NICs.
+mac-address	tests/bench/no-dhcp-overlay/etc/systemd/network/10-bench-control.network
+mac-address	tests/bench/rescue.sh
+mac-address	tests/bench/wifi-ap.sh
+
+# systemd template units (a getty instance name) that match the address
+# pattern. The glob's ? stands for the instance's at-sign, so the entry itself
+# is not an address.
+email	profile/airootfs/etc/systemd/system/getty?tty1.service.d/autologin.conf
+email	profile/airootfs/etc/systemd/system/rescue-key-record.service
+email	profile/airootfs/etc/systemd/system/livecd-talk.service
+email	tests/spikes/lib.sh
+
+# OpenSSH's FIDO key-type names (sk-ssh-ed25519 and the like, at openssh.com),
+# which the image scan skips and its test plants: algorithm names, not
+# addresses.
+email	release/image-leak-check.sh
+email	tests/release-test.sh
+
+# The rescue key's runtime directory and the image's key directory: the
+# product's own paths, which the checker lists so that they stay visible
+# everywhere else.
+rescue-key-path	profile/airootfs/etc/motd
+rescue-key-path	profile/airootfs/etc/rescue-proxy/nginx.conf
+rescue-key-path	profile/airootfs/etc/systemd/system/rescue-proxy.service
+rescue-key-path	profile/airootfs/root/.config/opencode/opencode.json
+rescue-key-path	profile/airootfs/root/rescue/AGENTS.md
+rescue-key-path	profile/airootfs/usr/local/bin/rescue-agent
+rescue-key-path	profile/airootfs/usr/local/bin/rescue-key-record
+rescue-key-path	profile/airootfs/usr/local/bin/rescue-proxy-conf
+rescue-key-path	profile/airootfs/usr/local/bin/rescue-secrets
+rescue-key-path	profile/airootfs/usr/local/lib/rescue-paths.sh
+rescue-key-path	profile/profiledef.sh
+rescue-key-path	tests/bench/guardrails.py
+rescue-key-path	tests/bench/key-teardown.sh
+rescue-key-path	tests/scenarios/c2-key-rejected/scenario.conf

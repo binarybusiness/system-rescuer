@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Mikael Moghadam (Binary Business)
+# Watch the agent's commands for one stuck in uninterruptible I/O (state D),
+# as a read of a failing disk can be, or as the bench saw a tar of an ESP and
+# a grep of a raw disk be in the bench: no timeout kills such a process, so
+# OpenCode would wait on its tool call forever with a silent screen.
+#
+#   rescue-hang-watch <pid>
+#
+# Watches every descendant of <pid> (rescue-agent's shell). When one has been
+# in state D for RESCUE_HANG_SECONDS (default 600) without a break, it writes
+# "<pid> <seconds> <command line>" to RESCUE_HANG_FILE (default
+# /run/rescue/hung-command) and stops the opencode processes that are <pid>'s
+# children (SIGTERM, then SIGKILL after 10 s), so rescue-agent restarts the
+# agent and tells it which command hung. It checks every RESCUE_HANG_POLL
+# seconds (default 30) and exits when <pid> is gone or after acting once.
+set -uo pipefail
+
+root=${1:?usage: rescue-hang-watch <pid>}
+limit=${RESCUE_HANG_SECONDS:-600}
+poll=${RESCUE_HANG_POLL:-30}
+file=${RESCUE_HANG_FILE:-/run/rescue/hung-command}
+declare -A since=()
+
+while kill -0 "$root" 2> /dev/null; do
+    now=$(date +%s)
+    declare -A parent=() state=() seen=()
+    for stat in /proc/[0-9]*/stat; do
+        # pid (comm) state ppid ...; comm may hold spaces and parentheses.
+        { read -r line < "$stat"; } 2> /dev/null || continue
+        pid=${line%% *}
+        read -r st pp _ <<< "${line##*) }"
+        parent[$pid]=$pp state[$pid]=$st
+    done
+    for pid in "${!parent[@]}"; do
+        # A descendant of root: walk up the parents.
+        p=${parent[$pid]} hops=0
+        while [[ -n $p && $p != 0 && $p != "$root" && $hops -lt 64 ]]; do p=${parent[$p]:-}; hops=$((hops + 1)); done
+        [[ $p == "$root" && ${state[$pid]} == D ]] || continue
+        seen[$pid]=1
+        since[$pid]=${since[$pid]:-$now}
+        if (( now - since[$pid] >= limit )); then
+            cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null)
+            mkdir -p "$(dirname "$file")"
+            printf '%s %s %s\n' "$pid" "$((now - since[$pid]))" "${cmd% }" > "$file"
+            agents=$(pgrep -P "$root" -x opencode)
+            [[ -n $agents ]] || exit 0
+            # shellcheck disable=SC2086  # one pid per word
+            kill -TERM $agents 2> /dev/null
+            for _ in $(seq 10); do sleep 1; pgrep -P "$root" -x opencode > /dev/null || exit 0; done
+            # shellcheck disable=SC2086
+            kill -KILL $agents 2> /dev/null
+            exit 0
+        fi
+    done
+    # A process that left state D starts its count again.
+    for pid in "${!since[@]}"; do [[ -n ${seen[$pid]:-} ]] || unset "since[$pid]"; done
+    unset parent state seen
+    sleep "$poll"
+done

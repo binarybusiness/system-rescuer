@@ -1,0 +1,13 @@
+# The offline package repository on the stick (build.sh): these
+# packages and everything they depend on, from the build day's mirrors, so a
+# cut-off update of an Arch-family target (Arch, EndeavourOS) can be finished
+# without a network. The live system's pacman never uses it.
+base
+dracut
+efibootmgr
+grub
+linux
+linux-firmware
+linux-lts
+mkinitcpio
+systemd

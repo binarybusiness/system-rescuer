@@ -1,0 +1,27 @@
+# The part of this repository that ships: what a public snapshot contains
+# (the public snapshot exports it). tests/leak-check.sh --tree . --paths tests/public-paths
+# scans exactly these. Planning documents, agent configuration and CI
+# workflows stay private.
+profile/
+lib/
+examples/
+release/
+tests/
+build.sh
+install.sh
+write-stick.sh
+README.md
+.gitignore
+.gitleaks.toml
+.shellcheckrc
+.githooks/pre-commit
+LICENSE
+COPYRIGHT
+THIRD-PARTY-NOTICES.md
+SECURITY.md
+CONTRIBUTING.md
+docs/threat-model.md
+docs/quickstart.md
+docs/demo.mp4
+docs/demo-poster.png
+.github/workflows/

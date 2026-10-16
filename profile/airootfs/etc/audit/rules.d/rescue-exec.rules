@@ -1,0 +1,3 @@
+# The command record: every program the agent (or anyone) runs on the
+# rescue system, read back with: ausearch --input-logs --raw -k rescue-exec
+-a always,exit -F arch=b64 -S execve,execveat -k rescue-exec

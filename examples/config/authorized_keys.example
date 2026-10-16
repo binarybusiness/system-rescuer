@@ -1,0 +1,4 @@
+# Copy to authorized_keys and put here the SSH public keys allowed to log in
+# to the stick as root, one per line (for example ~/.ssh/id_ed25519.pub of
+# the machine you will watch the repair from). Without authorized_keys the
+# stick takes no SSH login, and the repair is followed on its own screen.
