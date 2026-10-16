@@ -50,6 +50,12 @@
 # home paths are allowed in tests/leak-check.allow); the frames themselves
 # still need a look for hostnames, paths, addresses and keys before the video
 # is committed.
+# For inline playback in GitHub's README, upload the reviewed MP4 as a video
+# attachment and put its returned github.com/user-attachments/assets/ URL on
+# a paragraph of its own. A linked poster or repository MP4 link navigates to
+# the file instead; a literal video tag is stripped by GitHub's renderer.
+# Keep docs/demo.mp4 as the downloadable source copy, and verify playback
+# on the live repository page after updating the README's attachment URL.
 # Needs vhs (with ttyd and ffmpeg), minisign, sudo, and what
 # tests/quickstart-vm.sh and tests/scenario.sh need.
 set -euo pipefail

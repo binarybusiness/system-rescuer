@@ -13,9 +13,9 @@ it, asking for your OK before any step that could lose data.
 **Start here: [docs/quickstart.md](docs/quickstart.md)**, from nothing to a
 written stick, and what to do at the broken machine.
 
-[![The agent on the stick asking the owner before it repairs a dirty ext4 root; the video shows the installer checking a signed image and writing a USB stick in a scratch VM, then the rescue and the repaired disk booting on its own](docs/demo-poster.png)](docs/demo.mp4)
+https://github.com/user-attachments/assets/bfa710c4-374f-464f-9e31-7bbe525fd754
 
-*Open [the video](docs/demo.mp4) (two and a half minutes): the installer in a scratch VM, then a rescue of one of the [test bench](#the-test-bench)'s broken systems, the stick getting online by Wi-Fi from its menu; `tests/demo/record.sh` records it.*
+*Play the demo above (two and a half minutes): the installer checking a signed image and writing a USB stick in a scratch VM, then the stick joining Wi-Fi, the agent asking before repairing a dirty ext4 root, and the repaired disk booting on its own. [Download the video](docs/demo.mp4); `tests/demo/record.sh` records it.*
 
 ## What it does
 
