@@ -13,7 +13,7 @@
 release_pubkey=RWQqUFAm6iljYbnTwJgFKElY6U5QwYX4X9rM/r6XoBkHbMxuxWCVVRSj
 # The public repository, its release URL, and the identity used for its
 # scrubbed snapshot commits. Keep the name here so changing it is one edit.
-public_repo=binarybusiness/system-rescuer
+public_repo=binarybusiness/system-rescuer-public
 release_url=https://github.com/$public_repo/releases
 public_author='binarybusiness <81260583+binarybusiness@users.noreply.github.com>'
 # The assets of a release, each with <name>.sha256 and <name>.minisig; the

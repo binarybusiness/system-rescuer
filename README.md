@@ -106,8 +106,8 @@ crosses one fails, however well the repair went.
 
 ## Quickstart
 
-Once the first release is out (none is yet, see below), the prebuilt image is
-the short way:
+The prebuilt image on this repository's Releases page is the short way;
+`install.sh` downloads it, checks its signature and writes the stick:
 
 ```sh
 git clone <this repository's URL> system-rescuer && cd system-rescuer
@@ -139,8 +139,9 @@ untrusted comment: minisign public key 616329EA2650502A
 RWQqUFAm6iljYbnTwJgFKElY6U5QwYX4X9rM/r6XoBkHbMxuxWCVVRSj
 ```
 
-No image is published yet; until the first release, the quickstart shows how
-to build and sign one yourself.
+To check a downloaded image by hand, or to write one without the installer's
+download, see the quickstart's
+[prebuilt image](docs/quickstart.md#a-a-prebuilt-image) section.
 
 ## How it works
 
@@ -252,7 +253,7 @@ every run, and every repair passed in at least two of three runs.
   storage stack, hardware RAID) may defeat it; it then hands back what it
   found.
 - A key stored on the stick is not encrypted.
-- Prebuilt images are x86_64 only, and none is published yet.
+- Prebuilt images are x86_64 only.
 
 ## Status
 
@@ -260,7 +261,7 @@ Working. Its first real rescue brought back a NixOS home server whose
 generation switch had been cut off (a 0-byte kernel, no initrd), on
 2026-10-13; since then the bench above has driven its repairs and
 guardrails. The installer, the key-less prebuilt image and its signature
-check are done; the first public release is the maintainer's decision.
+check are done, and v1.0.0 is the first public release.
 
 ## Licence
 

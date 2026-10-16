@@ -56,14 +56,14 @@ static_address() {
            [[ " ${links[*]} " == *" $link "* ]] || { printf 'No card %s.\n' "$link"; return 1; } ;;
     esac
     printf 'Static address for %s (ask whoever runs the network, or read it off the router).\n' "$link"
-    read -r -p 'Address with prefix length, e.g. 192.168.1.50/24: ' addr
+    read -r -p 'Address with prefix length, e.g. 192.168.0.50/24: ' addr
     # Split before is_ipv4, whose own match replaces BASH_REMATCH.
     local ip=${addr%/*} prefix=${addr##*/}
     if [[ $addr != */* || ! $prefix =~ ^[0-9]{1,2}$ ]] || ! is_ipv4 "$ip" || (( 10#$prefix < 1 || 10#$prefix > 32 )); then
         printf 'Not an address with a prefix length: %s\n' "$addr"; return 1
     fi
     addr=$ip/$((10#$prefix))
-    read -r -p 'Gateway (the router), e.g. 192.168.1.1: ' gw
+    read -r -p 'Gateway (the router), e.g. 192.168.0.1: ' gw
     is_ipv4 "$gw" || { printf 'Not an address: %s\n' "$gw"; return 1; }
     read -r -p "DNS server [$gw]: " dns
     dns=${dns:-$gw}
