@@ -115,6 +115,15 @@ fi
 git -C "$source" checkout -- README.md
 
 check "denylisted message refuses" 1 run "$deny_word"
+session_message=$scratch/session-message.txt
+printf '  Claude-Session: fixture-id\n' > "$session_message"
+before=$(git -C "$public" rev-parse HEAD)
+check "agent-session message-file refuses" 1 "$publisher" "$public" --author "$author" --message-file "$session_message" --denylist "$denylist" --patterns "$patterns"
+if [[ $(git -C "$public" rev-parse HEAD) == "$before" && -z $(git -C "$public" status --porcelain) ]]; then
+    ok "agent-session refusal leaves clone unchanged"
+else
+    bad "agent-session refusal leaves clone unchanged"
+fi
 bad_author="$deny_word <public.tester${at}example.invalid>"
 check "denylisted author refuses" 1 "$publisher" "$public" --author "$bad_author" --message clean --denylist "$denylist" --patterns "$patterns"
 

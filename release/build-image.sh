@@ -136,6 +136,35 @@ release_gate() {
         || die "tag gate: $tag (commit $commit) is not reachable from $branch"
 }
 release_gate
+# Session metadata in an annotated tag is public release metadata. Scan only
+# its message with the shared checker before proceeding to the build.
+tag_message=$(mktemp)
+tag_record=$(mktemp)
+trap 'rm -f -- "$tag_message" "$tag_record"' EXIT
+tag_object_type=$(git -C "$repo" cat-file -t "refs/tags/$tag")
+if [[ $tag_object_type == tag ]]; then
+    git -C "$repo" cat-file tag "refs/tags/$tag" > "$tag_record"
+    sed '1,/^$/d' "$tag_record" > "$tag_message"
+fi
+if [[ -s $tag_message ]]; then
+    tag_scan=$(mktemp -d)
+    cp -- "$tag_message" "$tag_scan/tag-message.txt"
+    rc=0
+    "$repo/tests/leak-check.sh" --tree "$tag_scan" --private-only --denylist /dev/null --patterns /dev/null \
+        > "$tag_scan/out" 2> "$tag_scan/err" || rc=$?
+    if (( rc == 1 )) && grep -q $'^agent-session\t' "$tag_scan/out"; then
+        rm -rf -- "$tag_scan"
+        die "tag gate: annotated tag $tag message has an agent-session finding"
+    fi
+    if (( rc != 0 )); then
+        rm -rf -- "$tag_scan"
+        die "tag gate: could not validate the annotated tag message (leak-check exit $rc)"
+    fi
+    rm -rf -- "$tag_scan"
+fi
+rm -f -- "$tag_message"
+rm -f -- "$tag_record"
+trap - EXIT
 # The script that signs is the tag's own copy, so an edited checkout cannot
 # loosen the gate or the scan it runs.
 git -C "$repo" show "$tag:release/build-image.sh" 2>/dev/null | cmp -s - "${BASH_SOURCE[0]}" \
@@ -295,6 +324,13 @@ done
     printf 'branch %s\n\n' "$branch"
     ( cd -- "$stage" && sha256sum -- "$release_iso" "$release_repo" )
 } > "$stage/release-notes.txt"
+notes_scan=$(mktemp -d)
+cp -- "$stage/release-notes.txt" "$notes_scan/release-notes.txt"
+rc=0
+"$src/tests/leak-check.sh" --tree "$notes_scan" --private-only --denylist /dev/null --patterns /dev/null \
+    > "$notes_scan/out" 2> "$notes_scan/err" || rc=$?
+rm -rf -- "$notes_scan"
+(( rc == 0 )) || die "release notes failed the agent-session scan (exit $rc); nothing was finalized"
 cp -- "$pub" "$stage/minisign.pub"
 for f in "$release_iso" "$release_iso.sha256" "$release_iso.minisig" "$release_repo" "$release_repo.sha256" "$release_repo.minisig" release-notes.txt minisign.pub; do
     mv -- "$stage/$f" "$out/$f"

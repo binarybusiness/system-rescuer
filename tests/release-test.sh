@@ -227,6 +227,8 @@ fast_tier() {
         rm -rf -- "$d"
         mkdir -p "$d"
         cp -a "$tagrepo/release" "$d/release"
+        mkdir -p "$d/tests"
+        cp -- "$tagrepo/tests/leak-check.sh" "$d/tests/leak-check.sh"
         git -C "$d" init -q -b main
         git -C "$d" config user.name "Release Test"
         git -C "$d" config user.email "release-test${at}example.invalid"
@@ -263,6 +265,13 @@ fast_tier() {
     git -C "$t/gate-order" branch release/v1
     gate_refuses "a tag that is not the greatest is refused" "$t/gate-order" v1.0.0 'not the greatest' 'v1.1.0'
     gate_passes "the greatest tag passes (lightweight)" "$t/gate-order" v1.1.0
+
+    gate_repo agent-session
+    session_url_prefix="https://claude.ai/code/"
+    session_url="${session_url_prefix}session_fixture"
+    gate_tag "$t/gate-agent-session" -a -m "$session_url" v1.0.0
+    git -C "$t/gate-agent-session" branch release/v1
+    gate_refuses "an annotated tag with an agent-session URL is refused" "$t/gate-agent-session" v1.0.0 'agent-session'
 
     gate_repo numeric
     gate_tag "$t/gate-numeric" v1.9.0

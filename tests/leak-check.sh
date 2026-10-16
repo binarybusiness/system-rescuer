@@ -23,6 +23,10 @@
 # --private-only drops the generic categories below and reports only the
 # denylist and the patterns file's categories, for a scan whose generic
 # findings are expected (a whole operating system image).
+# agent-session is the exception: agent-session links and trailers are never
+# public, so that category remains enabled even with --private-only.
+# agent-session matches Claude session URLs, Claude-Session trailer lines and
+# Co-Authored-By trailer lines naming Claude; it is never allow-listed.
 # --denylist overrides the default ~/.config/system-rescuer/leak-denylist
 # (one literal word per line, matched case-insensitively, whole-word).
 # --patterns overrides the default ~/.config/system-rescuer/leak-patterns,
@@ -203,6 +207,7 @@ declare -A CAT_PATTERN=(
     [home-path]='/(?:home|Users)/[^/[:space:]]+/'
     [rescue-key-path]='(?:/run/\.?rescue-key|/root/\.config/rescue)\b'
     [fs-uuid]='(?i)(?=.*uuid).*(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\b[0-9a-f]{4}-[0-9a-f]{4}\b)'
+    [agent-session]='(?i)(?:claude[.]ai/code/session_|^[[:space:]]*claude-session[[:space:]]*:|^[[:space:]]*co-authored-by[[:space:]]*:.*\bclaude\b)'
 )
 # Identity surface: same as CAT_PATTERN but a noreply GitHub address is not
 # an "email" finding there, per the spec's identity exception; the denylist
@@ -221,6 +226,7 @@ done
 
 if (( private_only )); then
     for k in "${!CAT_PATTERN[@]}"; do
+        [[ $k == agent-session ]] && continue
         [[ -n ${private_pattern[$k]:-} ]] && continue
         unset "CAT_PATTERN[$k]" "CAT_PATTERN_IDENTITY[$k]"
     done

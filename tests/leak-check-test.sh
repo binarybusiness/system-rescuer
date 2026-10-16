@@ -167,6 +167,53 @@ assert_absent_everywhere "history: planted pattern never printed" "PLANTED-MARK"
 assert_absent_everywhere "history: denylist word never printed" "$denylist_word" "$hist_stdout" "$hist_stderr"
 rm -f "$hist_out" "$hist_err"
 
+# --- agent-session is unconditional, including private-only scans ----------
+
+agent_repo="$scratch/agent-session"
+mkdir -p "$agent_repo"
+git -C "$agent_repo" init -q -b main
+git -C "$agent_repo" config user.name "Scratch Tester"
+git -C "$agent_repo" config user.email "scratch-tester${at}example.invalid"
+session_url_prefix="https://claude.ai/code/"
+session_url="${session_url_prefix}session_fixture"
+printf '%s\n' "$session_url" > "$agent_repo/session-url.txt"
+agent_out=$(mktemp) agent_err=$(mktemp)
+agent_rc=$(run_check "$agent_out" "$agent_err" --tree "$agent_repo" --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: tree URL refused" "$agent_rc" 1
+assert_found "agent-session: tree URL reports category and location" "$(cat "$agent_out")" '^agent-session[[:space:]]session-url.txt:1$'
+session_url_pattern='claude.ai/code/''session_'
+if grep -qF "$session_url_pattern" "$agent_out" "$agent_err"; then
+    fail "agent-session: matched URL is never printed"
+else
+    pass "agent-session: matched URL is never printed"
+fi
+printf '  Claude-Session: fixture-id\n' > "$agent_repo/session-trailer.txt"
+agent_rc=$(run_check "$agent_out" "$agent_err" --tree "$agent_repo" --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: tree trailer refused" "$agent_rc" 1
+assert_found "agent-session: tree trailer location reported" "$(cat "$agent_out")" '^agent-session[[:space:]]session-trailer.txt:1$'
+
+git -C "$agent_repo" add -A
+git -C "$agent_repo" commit -q -m 'tree fixtures'
+git -C "$agent_repo" commit --allow-empty -q -m $'history fixture\n\n  Claude-Session: history-id'
+agent_rc=$(run_check "$agent_out" "$agent_err" --history "$agent_repo" --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: history Claude-Session trailer refused" "$agent_rc" 1
+assert_found "agent-session: history message location reported" "$(cat "$agent_out")" '^agent-session[[:space:]].*:message$'
+claude_noreply="noreply${at}anthropic.com"
+git -C "$agent_repo" commit --allow-empty -q -m $'history fixture\n\nCo-Authored-By: Claude <'"$claude_noreply"'>'
+agent_rc=$(run_check "$agent_out" "$agent_err" --history "$agent_repo" --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: history Claude co-author refused" "$agent_rc" 1
+assert_found "agent-session: co-author message location reported" "$(cat "$agent_out")" '^agent-session[[:space:]].*:message$'
+agent_rc=$(run_check "$agent_out" "$agent_err" --history "$agent_repo" --private-only --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: --private-only without --dev-process refuses" "$agent_rc" 1
+assert_found "agent-session: --private-only retains category" "$(cat "$agent_out")" '^agent-session[[:space:]]'
+
+agent_negative="$scratch/agent-negative"
+mkdir -p "$agent_negative"
+printf '%s\n' 'Claude discussed the session format in prose.' 'Co-Authored-By: Human Example' > "$agent_negative/clean.txt"
+agent_rc=$(run_check "$agent_out" "$agent_err" --tree "$agent_negative" --denylist /dev/null --patterns /dev/null)
+assert_rc "agent-session: ordinary prose and human co-author pass" "$agent_rc" 0
+rm -f "$agent_out" "$agent_err"
+
 # --- a clean tree exits 0 with no findings --------------------------------
 
 clean=$(mktemp -d)
@@ -287,7 +334,7 @@ allow_rc=$?
 assert_rc "allow-list: exit 0 once every finding is listed" "$allow_rc" 0
 rm -f "$allow_out" "$allow_err"
 
-for bad in denylist planning-id; do
+for bad in denylist planning-id agent-session; do
     allow_out=$(mktemp) allow_err=$(mktemp)
     allow_script=$(allow_case "bad-$bad" "$(printf '# scratch allow-list\n%s\tfixtures/config.txt\n' "$bad")")
     "$allow_script" --tree "$allow_tree" --denylist /dev/null --patterns /dev/null > "$allow_out" 2> "$allow_err"
