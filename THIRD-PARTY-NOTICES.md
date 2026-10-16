@@ -3,7 +3,9 @@
 system-rescuer is licensed under the GNU General Public License, version 3
 or (at your option) any later version ([LICENSE](LICENSE)); every source
 file says so in an `SPDX-License-Identifier` line, which
-`tests/spdx-check.sh` checks. This page lists what the repository and the
+`tests/spdx-check.sh` checks, together with this project's holder line on owned
+files. Project attribution is in [COPYRIGHT](COPYRIGHT); it applies to original
+code and modifications, not third-party portions. This page lists what the repository and the
 image it builds carry that others wrote, and under which terms.
 
 ## In the repository
@@ -20,6 +22,10 @@ nearly so (among them `profile/airootfs/usr/local/bin/choose-mirror`,
 `profile/efiboot/`, `profile/grub/` and `profile/syslinux/`, and the base of
 `profile/packages.x86_64`, `profile/pacman.conf` and `profile/profiledef.sh`)
 keep archiso's copyright, held by its contributors (archiso's `AUTHORS.rst`).
+The copied `choose-mirror`, `livecd-sound`, `Installation_guide` and
+`profile/airootfs/root/.automated_script.sh` remain unchanged; the holder
+check excludes those upstream files. Modified derived files such as
+`profile/profiledef.sh` also identify this project's modifications.
 
 ### diskrepair's playbooks
 

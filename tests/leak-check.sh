@@ -10,7 +10,8 @@
 # lib/release-layout.sh: on that file's public_repo= or public_author=
 # assignment line, or in a history author/committer identity exactly equal to
 # public_author. All other denylisted matches, including another word on an
-# exempt assignment line, remain findings.
+# exempt assignment line, remain findings. The owner's published copyright
+# notice has a separate exact-line exception, pinned by its SHA256 below.
 #
 #   tests/leak-check.sh [--tree <dir> [--paths <file>]] [--history <repo>] [--dev-process] [--private-only] [--denylist <file>] [--patterns <file>]
 #
@@ -248,6 +249,31 @@ skip_binary_total=0
 
 # --- scanning primitives ----------------------------------------------------
 
+# Only the reviewed notice shipped beside this checker can define copyright
+# exceptions. Never trust the scanned tree to choose an identity to exempt.
+copyright_notice=
+copyright_holder=
+if [[ -r $script_dir/../COPYRIGHT ]]; then
+    IFS= read -r copyright_candidate < "$script_dir/../COPYRIGHT" || true
+    copyright_digest=$(printf '%s\n' "$copyright_candidate" | sha256sum)
+    if [[ ${copyright_digest%% *} == 4946cc1c629c9ee78c7eb5178d6e2f49b97e9bd468b0664909755783561b93f9 ]]; then
+        copyright_notice=$copyright_candidate
+        copyright_holder="SPDX-FileCopyrightText: ${copyright_notice#Copyright (C) }"
+    fi
+fi
+
+is_public_copyright_line() {
+    local path=$1 content=$2
+    [[ -n $copyright_notice ]] || return 1
+    case $content in
+        "# $copyright_holder"|"// $copyright_holder"|"REM $copyright_holder") return 0 ;;
+    esac
+    [[ $path == COPYRIGHT && $content == "$copyright_notice" ]] && return 0
+    [[ $path == README.md && $content == "$copyright_notice." ]] && return 0
+    [[ ( $path == tests/spdx-check.sh || $path == tests/spdx-check-test.sh ) \
+        && $content == "holder='$copyright_holder'" ]]
+}
+
 # The public identity is parsed, not sourced, because the checker scans
 # untrusted snapshot trees. A missing or malformed layout grants no exemption.
 public_repo_owner=
@@ -274,6 +300,7 @@ load_public_identity() {
 denylist_line_has_finding() {
     local path=$1 content=$2 reduced
     [[ -n $denylist_pattern ]] || return 1
+    is_public_copyright_line "$path" "$content" && return 1
     if [[ -n $public_repo_owner && $path == lib/release-layout.sh \
         && ( $content == public_repo=* || $content == public_author=* ) ]]; then
         reduced=$(OWNER_WORD=$public_repo_owner perl -CS -pe 's/\b\Q$ENV{OWNER_WORD}\E\b//ig' <<< "$content")

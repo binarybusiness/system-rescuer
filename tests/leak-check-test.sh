@@ -229,7 +229,45 @@ fi
 rm -rf "$clean"
 rm -f "$clean_out" "$clean_err"
 
-# --- public snapshot identity: exactly two denylist exemptions ------------
+# --- reviewed public copyright: exact lines, never arbitrary identities ---
+
+copyright_tree="$scratch/copyright-tree"
+mkdir -p "$copyright_tree/tests"
+IFS= read -r notice < "$here/../COPYRIGHT"
+copyright_holder="SPDX-FileCopyrightText: ${notice#Copyright (C) }"
+copyright_name=${notice#Copyright (C) ???? }
+copyright_denylist="$scratch/copyright-denylist"
+printf '%s\n%s\n' "${copyright_name%% *}" "$denylist_word" > "$copyright_denylist"
+printf '%s\n' "$notice" > "$copyright_tree/COPYRIGHT"
+printf '%s.\n' "$notice" > "$copyright_tree/README.md"
+printf '# %s\n' "$copyright_holder" > "$copyright_tree/owned.sh"
+printf "holder='%s'\n" "$copyright_holder" > "$copyright_tree/tests/spdx-check.sh"
+copyright_out=$(mktemp) copyright_err=$(mktemp)
+copyright_rc=$(run_check "$copyright_out" "$copyright_err" --tree "$copyright_tree" --denylist "$copyright_denylist" --patterns /dev/null)
+assert_rc "copyright: reviewed notice and exact holder lines pass" "$copyright_rc" 0
+printf '%s\n' "$notice" > "$copyright_tree/other.txt"
+copyright_rc=$(run_check "$copyright_out" "$copyright_err" --tree "$copyright_tree" --denylist "$copyright_denylist" --patterns /dev/null)
+assert_rc "copyright: the notice in an unrelated file is refused" "$copyright_rc" 1
+rm "$copyright_tree/other.txt"
+printf '# %s %s\n' "$copyright_holder" "$denylist_word" >> "$copyright_tree/owned.sh"
+copyright_rc=$(run_check "$copyright_out" "$copyright_err" --tree "$copyright_tree" --denylist "$copyright_denylist" --patterns /dev/null)
+assert_rc "copyright: appended private data is refused" "$copyright_rc" 1
+sed -i '$d' "$copyright_tree/owned.sh"
+git -C "$copyright_tree" init -q -b main
+git -C "$copyright_tree" add .
+git -C "$copyright_tree" -c user.name=Tester -c user.email=tester@localhost commit -q -m copyright
+copyright_rc=$(run_check "$copyright_out" "$copyright_err" --history "$copyright_tree" --denylist "$copyright_denylist" --patterns /dev/null)
+assert_rc "copyright: historical blob headers pass" "$copyright_rc" 0
+# A copied checker beside an invented notice must not grant an exemption.
+mkdir -p "$scratch/untrusted-checker/tests"
+cp "$leak_check" "$scratch/untrusted-checker/tests/leak-check.sh"
+printf 'Copyright (C) %s\n' "$denylist_word" > "$scratch/untrusted-checker/COPYRIGHT"
+printf '# SPDX-FileCopyrightText: %s\n' "$denylist_word" > "$copyright_tree/other.txt"
+"$scratch/untrusted-checker/tests/leak-check.sh" --tree "$copyright_tree" --denylist "$copyright_denylist" --patterns /dev/null > "$copyright_out" 2> "$copyright_err"
+assert_rc "copyright: a changed notice cannot broaden the exception" "$?" 1
+rm -f "$copyright_out" "$copyright_err"
+
+# --- public snapshot identity: exactly two layout denylist exemptions -------
 
 public_owner="binary""business"
 public_email="81260583+${public_owner}${at}users.noreply.github.com"
