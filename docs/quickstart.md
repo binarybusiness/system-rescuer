@@ -102,11 +102,11 @@ print a trusted comment naming that file and the release's version, such as
 Then `./install.sh --prebuilt --image system-rescuer-x86_64.iso --repo
 system-rescuer-x86_64-repo.img` writes those files.
 
-### Before the first release: an image you sign yourself
+### An image you sign yourself
 
-No image is published yet. Until there is one, build the key-less image
-yourself and sign it with a minisign key of your own; this takes the place
-of steps 2 to 4 above:
+For an image of your own (another provider, say, or a change of your own),
+build the key-less image yourself and sign it with a minisign key of your
+own; this takes the place of steps 2 to 4 above:
 
 1. Install step 1's tools above (minisign and curl; its `./install.sh
    --check --prebuilt` may run too, and checks only the write's tools) and
@@ -257,7 +257,7 @@ the image again.
      `provider_key_prefix=` (empty) if your key does not start with `sk-`
      or you do not know how it starts,
      since the build refuses one that does not (and so does the write of a
-     key-less image built with it, as in "Before the first release" above).
+     key-less image built with it, as in "An image you sign yourself" above).
 
    - `machines/`: what the agent should know about your own machines (see
      `profile/airootfs/root/rescue/machines/README.md`). The example profile
